@@ -46,22 +46,41 @@ export default function WheelTrackerDesktop() {
 
 function AuthPage() {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [message, setMessage] = useState(null);
 
   const handleAuth = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setMessage(null);
 
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
+      if (isForgotPassword) {
+        // Send password reset email
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
         if (error) throw error;
-        alert('Check your email to confirm your account!');
+        setMessage('Password reset email sent! Check your inbox.');
+        setEmail('');
+      } else if (isSignUp) {
+        // Sign up
+        const { error } = await supabase.auth.signUp({ 
+          email, 
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+          }
+        });
+        if (error) throw error;
+        setMessage('✅ Check your email to verify your account!');
       } else {
+        // Sign in
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
@@ -75,10 +94,24 @@ function AuthPage() {
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: '#0a0e14' }}>
       <div className="data-card p-8 w-full max-w-md rounded-lg">
-        <h1 className="text-white text-2xl font-semibold mb-2">WheelTracker Desktop</h1>
-        <p className="text-gray-500 text-sm mb-6">Professional Trading Platform</p>
+        <h1 className="text-white text-2xl font-semibold mb-2">
+          {isForgotPassword ? 'Reset Password' : 'WheelTracker Desktop'}
+        </h1>
+        <p className="text-gray-500 text-sm mb-6">
+          {isForgotPassword ? 'Enter your email to reset password' : 'Professional Trading Platform'}
+        </p>
 
-        {error && <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded text-sm">{error}</div>}
+        {error && (
+          <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded text-sm">
+            {error}
+          </div>
+        )}
+
+        {message && (
+          <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 text-green-400 rounded text-sm">
+            {message}
+          </div>
+        )}
 
         <form onSubmit={handleAuth} className="space-y-4">
           <div>
@@ -91,36 +124,68 @@ function AuthPage() {
               required
             />
           </div>
-          <div>
-            <label className="info-label block mb-2">PASSWORD</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
-              required
-              minLength={6}
-            />
-          </div>
+
+          {!isForgotPassword && (
+            <div>
+              <label className="info-label block mb-2">PASSWORD</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+                required
+                minLength={6}
+              />
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={loading}
             className="w-full bg-gray-700 hover:bg-gray-600 text-white font-medium py-3 rounded transition disabled:opacity-50"
           >
-            {loading ? 'Please wait...' : (isSignUp ? 'Sign Up' : 'Sign In')}
+            {loading ? 'Please wait...' : (
+              isForgotPassword ? 'Send Reset Link' :
+              isSignUp ? 'Sign Up' : 'Sign In'
+            )}
           </button>
         </form>
 
-        <button
-          onClick={() => setIsSignUp(!isSignUp)}
-          className="w-full mt-4 text-gray-400 hover:text-gray-300 text-sm"
-        >
-          {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-        </button>
+        {!isForgotPassword && (
+          <div className="mt-4 text-center">
+            <button
+              onClick={() => setIsForgotPassword(true)}
+              className="text-gray-400 hover:text-gray-300 text-sm"
+            >
+              Forgot Password?
+            </button>
+          </div>
+        )}
+
+        <div className="mt-4 text-center">
+          <button
+            onClick={() => {
+              if (isForgotPassword) {
+                setIsForgotPassword(false);
+                setError(null);
+                setMessage(null);
+              } else {
+                setIsSignUp(!isSignUp);
+                setError(null);
+                setMessage(null);
+              }
+            }}
+            className="text-gray-400 hover:text-gray-300 text-sm"
+          >
+            {isForgotPassword ? '← Back to Sign In' :
+             isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
+
 
 function DesktopApp({ user }) {
   const [currentPage, setCurrentPage] = useState('dashboard');
