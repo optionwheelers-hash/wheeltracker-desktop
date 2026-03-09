@@ -949,6 +949,7 @@ function AddTradePage({ onSuccess, userId }) {
   const [avgBuyPrice, setAvgBuyPrice] = useState('');
   const [buyFee, setBuyFee] = useState('0');
   const [source, setSource] = useState('Assignment');
+  const [buyDate, setBuyDate] = useState(new Date().toISOString().split('T')[0]);
 
   const handleSubmitContract = async (e) => {
     e.preventDefault();
@@ -992,14 +993,15 @@ function AddTradePage({ onSuccess, userId }) {
     setSubmitting(true);
 
     const stockData = {
-      ticker: ticker.toUpperCase(),
-      shares: parseInt(shares),
-      avg_buy_price: parseFloat(avgBuyPrice),
-      current_price: parseFloat(avgBuyPrice),
-      buy_fee: parseFloat(buyFee),
-      source,
-      user_id: userId
-    };
+  ticker: ticker.toUpperCase(),
+  shares: parseInt(shares),
+  avg_buy_price: parseFloat(avgBuyPrice),
+  current_price: parseFloat(avgBuyPrice),
+  buy_fee: parseFloat(buyFee),
+  source,
+  date_acquired: buyDate,  // Add this line
+  user_id: userId
+};
 
     try {
       const { error } = await supabase.from('stocks').insert([stockData]);
@@ -1052,6 +1054,18 @@ function AddTradePage({ onSuccess, userId }) {
           <FormInput label="Number of Shares" value={shares} onChange={setShares} type="number" required />
           <FormInput label="Average Buy Price" value={avgBuyPrice} onChange={setAvgBuyPrice} type="number" step="0.01" required />
           <FormInput label="Buy Fee" value={buyFee} onChange={setBuyFee} type="number" step="0.01" />
+          <div>
+  <label className="info-label block mb-2">
+    {source === 'Assignment' ? 'ASSIGNMENT DATE' : 'PURCHASE DATE'}
+  </label>
+  <input
+    type="date"
+    value={buyDate}
+    onChange={(e) => setBuyDate(e.target.value)}
+    className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+    required
+  />
+</div>
           <div>
             <label className="info-label block mb-2">SOURCE</label>
             <select value={source} onChange={(e) => setSource(e.target.value)} className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm">
