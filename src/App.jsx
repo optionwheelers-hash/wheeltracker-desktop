@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Home, List, Plus, Briefcase, BarChart3, LogOut, RefreshCw, Edit2, X } from 'lucide-react';
 import { BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
+const FINNHUB_API_KEY = 'd6mn0b1r01qir35hndo0d6mn0b1r01qir35hndog';
 const COLORS = ['#00d4aa', '#3b82f6', '#f59e0b', '#ef4444'];
 
 const supabaseUrl = 'https://zrstqrerxpythrzsoqbb.supabase.co';
@@ -184,6 +185,153 @@ function AuthPage() {
       </div>
     </div>
   );
+}
+async function fetchStockPrice(ticker) {
+  try {
+    const response = await fetch(
+      `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`
+    );
+    const data = await response.json();
+    return data.c && data.c > 0 ? data.c : null; // c = current price
+  } catch (error) {
+    console.error(`Error fetching ${ticker}:`, error);
+    return null;
+  }
+}
+async function fetchOptionData(ticker, strike, expiry, type) {
+  try {
+    // Format expiry for Yahoo (YYYY-MM-DD to Unix timestamp)
+    const expiryDate = new Date(expiry);
+    const expiryTimestamp = Math.floor(expiryDate.getTime() / 1000);
+    
+    // Yahoo Finance API endpoint (free, no key needed)
+    const response = await fetch(
+      `https://query2.finance.yahoo.com/v7/finance/options/${ticker}?date=${expiryTimestamp}`
+    );
+    const data = await response.json();
+    
+    if (!data.optionChain?.result?.[0]) return null;
+    
+    const chain = data.optionChain.result[0];
+    const options = type === 'Call' ? chain.options[0]?.calls : chain.options[0]?.puts;
+    
+    if (!options) return null;
+    
+    // Find the matching option by strike price
+    const option = options.find(opt => 
+      Math.abs(opt.strike - parseFloat(strike)) < 0.01
+    );
+    
+    if (!option) return null;
+    
+    return {
+      lastPrice: option.lastPrice || 0,
+      bid: option.bid || 0,
+      ask: option.ask || 0,
+      volume: option.volume || 0,
+      openInterest: option.openInterest || 0,
+      impliedVolatility: option.impliedVolatility || 0,
+      // Greeks (if available)
+      delta: option.delta || null,
+      gamma: option.gamma || null,
+      theta: option.theta || null,
+      vega: option.vega || null,
+      inTheMoney: option.inTheMoney || false
+    };
+  } catch (error) {
+    console.error(`Error fetching option data for ${ticker}:`, error);
+    return null;
+  }
+}
+async function updateStockPrices(stocks, userId) {
+  const updates = [];
+  
+  for (const stock of stocks) {
+    const price = await fetchStockPrice(stock.ticker);
+    
+    if (price) {
+      updates.push({
+        id: stock.id,
+        current_price: price,
+        last_updated: new Date().toISOString()
+      });
+    }
+    
+    // Delay to respect rate limits
+    await new Promise(resolve => setTimeout(resolve, 1100));
+  }
+  
+  // Update database
+  for (const update of updates) {
+    try {
+      await supabase
+        .from('stocks')
+        .update({ 
+          current_price: update.current_price,
+          last_updated: update.last_updated
+        })
+        .eq('id', update.id)
+        .eq('user_id', userId);
+    } catch (error) {
+      console.error('Error updating stock:', error);
+    }
+  }
+  
+  return updates.length;
+}
+async function updateOptionPrices(contracts, userId) {
+  const updates = [];
+  
+  for (const contract of contracts.filter(c => c.status === 'Open')) {
+    const optionData = await fetchOptionData(
+      contract.symbol,
+      contract.strike,
+      contract.expiry,
+      contract.type
+    );
+    
+    if (optionData) {
+      // Calculate current market value
+      const currentPrice = optionData.lastPrice || ((optionData.bid + optionData.ask) / 2);
+      const originalPremium = parseFloat(contract.premium) || 0;
+      const numContracts = parseFloat(contract.num_contracts) || 1;
+      
+      // Current value vs what we sold it for
+      const soldFor = originalPremium * 100 * numContracts;
+      const currentValue = currentPrice * 100 * numContracts;
+      const unrealizedPL = soldFor - currentValue; // Profit if we sold and price decreased
+      
+      updates.push({
+        id: contract.id,
+        current_price: currentPrice,
+        unrealized_pl: unrealizedPL,
+        implied_volatility: optionData.impliedVolatility,
+        delta: optionData.delta,
+        gamma: optionData.gamma,
+        theta: optionData.theta,
+        vega: optionData.vega,
+        last_updated: new Date().toISOString()
+      });
+    }
+    
+    // Delay to avoid overwhelming API
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  
+  // Update database
+  for (const update of updates) {
+    try {
+      await supabase
+        .from('contracts')
+        .update(update)
+        .eq('id', update.id)
+        .eq('user_id', userId);
+    } catch (error) {
+      console.error('Error updating contract:', error);
+    }
+  }
+  
+  return updates.length;
 }
 
 
@@ -511,11 +659,44 @@ function DashboardPage({ contracts, stocks }) {
 }
 
 function OptionsPage({ contracts, onRefresh }) {
+  const [updating, setUpdating] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+
+  const handleUpdatePrices = async () => {
+    setUpdating(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const count = await updateOptionPrices(contracts, user.id);
+      setLastUpdate(new Date());
+      alert(`✅ Updated ${count} option contracts!`);
+      onRefresh();
+    } catch (error) {
+      alert('Error updating options: ' + error.message);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   return (
     <div className="p-6">
       <div className="data-card rounded-lg overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-800">
-          <div className="info-label">ALL CONTRACTS</div>
+        <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <div className="info-label">ALL CONTRACTS</div>
+            {lastUpdate && (
+              <div className="text-xs text-gray-500 mt-1">
+                Last updated: {lastUpdate.toLocaleTimeString()}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleUpdatePrices}
+            disabled={updating || contracts.filter(c => c.status === 'Open').length === 0}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded transition disabled:opacity-50 flex items-center gap-2"
+          >
+            <RefreshCw size={16} className={updating ? 'animate-spin' : ''} />
+            {updating ? 'Updating...' : 'Update Prices'}
+          </button>
         </div>
 
         {contracts.length === 0 ? (
@@ -537,7 +718,15 @@ function OptionsPage({ contracts, onRefresh }) {
               const premiumPerShare = parseFloat(contract.premium) || 0;
               const numContracts = parseFloat(contract.num_contracts) || 1;
               const totalPremium = premiumPerShare * 100 * numContracts;
-              const netPL = contract.status === 'Closed' ? (parseFloat(contract.profit) || 0) : (totalPremium - (parseFloat(contract.open_fee) || 0));
+              
+              let netPL;
+              if (contract.status === 'Closed') {
+                netPL = parseFloat(contract.profit) || 0;
+              } else if (contract.unrealized_pl !== null && contract.unrealized_pl !== undefined) {
+                netPL = contract.unrealized_pl;
+              } else {
+                netPL = totalPremium - (parseFloat(contract.open_fee) || 0);
+              }
 
               return (
                 <div key={contract.id} className="data-row grid grid-cols-12 gap-4 px-5 py-4 items-center">
@@ -555,7 +744,12 @@ function OptionsPage({ contracts, onRefresh }) {
                   <div className="col-span-2 neutral">${contract.strike}</div>
                   <div className="col-span-2 neutral text-sm">{new Date(contract.expiry).toLocaleDateString()}</div>
                   <div className="col-span-1 text-center neutral">{contract.num_contracts}</div>
-                  <div className="col-span-2 text-right neutral">${totalPremium.toFixed(2)}</div>
+                  <div className="col-span-2 text-right neutral">
+                    ${totalPremium.toFixed(2)}
+                    {contract.current_price && (
+                      <div className="text-xs text-gray-500">Now: ${(contract.current_price * 100 * numContracts).toFixed(2)}</div>
+                    )}
+                  </div>
                   <div className={`col-span-1 text-right font-medium ${netPL >= 0 ? 'gain' : 'loss'}`}>
                     {netPL >= 0 ? '+' : ''}${netPL.toFixed(0)}
                   </div>
@@ -569,15 +763,52 @@ function OptionsPage({ contracts, onRefresh }) {
   );
 }
 
-function HoldingsPage({ stocks }) {
+function HoldingsPage({ stocks, onRefresh }) {
+  const [updating, setUpdating] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  
   const totalValue = stocks.reduce((sum, s) => sum + (s.shares * (s.current_price || s.avg_buy_price)), 0);
+
+  const handleUpdatePrices = async () => {
+    setUpdating(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const count = await updateStockPrices(stocks, user.id);
+      setLastUpdate(new Date());
+      alert(`✅ Updated prices for ${count} stocks!`);
+      onRefresh();
+    } catch (error) {
+      alert('Error updating prices: ' + error.message);
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   return (
     <div className="p-6">
       <div className="data-card rounded-lg overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
-          <div className="info-label">STOCK HOLDINGS</div>
-          <div className="text-white text-lg font-semibold data-value">${totalValue.toLocaleString(undefined, {maximumFractionDigits: 0})}</div>
+          <div>
+            <div className="info-label">STOCK HOLDINGS</div>
+            {lastUpdate && (
+              <div className="text-xs text-gray-500 mt-1">
+                Last updated: {lastUpdate.toLocaleTimeString()}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="text-white text-lg font-semibold data-value">
+              ${totalValue.toLocaleString(undefined, {maximumFractionDigits: 0})}
+            </div>
+            <button
+              onClick={handleUpdatePrices}
+              disabled={updating || stocks.length === 0}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded transition disabled:opacity-50 flex items-center gap-2"
+            >
+              <RefreshCw size={16} className={updating ? 'animate-spin' : ''} />
+              {updating ? 'Updating...' : 'Update Prices'}
+            </button>
+          </div>
         </div>
 
         {stocks.length === 0 ? (
@@ -595,7 +826,12 @@ function HoldingsPage({ stocks }) {
                   <div className="flex items-center justify-between mb-3">
                     <div>
                       <div className="text-white text-lg font-medium">{stock.ticker}</div>
-                      <div className="text-xs neutral mt-1">{stock.shares} shares @ ${stock.avg_buy_price}</div>
+                      <div className="text-xs neutral mt-1">
+                        {stock.shares} shares @ ${stock.avg_buy_price}
+                        {stock.current_price && stock.current_price !== stock.avg_buy_price && (
+                          <span className="ml-2">• Current: ${stock.current_price.toFixed(2)}</span>
+                        )}
+                      </div>
                     </div>
                     <div className="text-right">
                       <div className="text-white text-lg font-medium data-value">${currentValue.toFixed(2)}</div>
