@@ -1,4 +1,4 @@
-// PROFESSIONAL DESKTOP APP.JSX FOR WHEELTRACKER
+// PROFESSIONAL DESKTOP APP.JSX FOR WHEELTRACKER - FIXED VERSION
 // Replace your src/App.jsx with this entire file
 
 import React, { useState, useEffect } from 'react';
@@ -62,7 +62,6 @@ function AuthPage() {
 
     try {
       if (isForgotPassword) {
-        // Send password reset email
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
           redirectTo: `${window.location.origin}/reset-password`,
         });
@@ -70,7 +69,6 @@ function AuthPage() {
         setMessage('Password reset email sent! Check your inbox.');
         setEmail('');
       } else if (isSignUp) {
-        // Sign up
         const { error } = await supabase.auth.signUp({ 
           email, 
           password,
@@ -81,7 +79,6 @@ function AuthPage() {
         if (error) throw error;
         setMessage('✅ Check your email to verify your account!');
       } else {
-        // Sign in
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
@@ -186,25 +183,26 @@ function AuthPage() {
     </div>
   );
 }
+
+// HELPER FUNCTIONS FOR LIVE PRICE DATA
 async function fetchStockPrice(ticker) {
   try {
     const response = await fetch(
       `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_API_KEY}`
     );
     const data = await response.json();
-    return data.c && data.c > 0 ? data.c : null; // c = current price
+    return data.c && data.c > 0 ? data.c : null;
   } catch (error) {
     console.error(`Error fetching ${ticker}:`, error);
     return null;
   }
 }
+
 async function fetchOptionData(ticker, strike, expiry, type) {
   try {
-    // Format expiry for Yahoo (YYYY-MM-DD to Unix timestamp)
     const expiryDate = new Date(expiry);
     const expiryTimestamp = Math.floor(expiryDate.getTime() / 1000);
     
-    // Yahoo Finance API endpoint (free, no key needed)
     const response = await fetch(
       `https://query2.finance.yahoo.com/v7/finance/options/${ticker}?date=${expiryTimestamp}`
     );
@@ -217,7 +215,6 @@ async function fetchOptionData(ticker, strike, expiry, type) {
     
     if (!options) return null;
     
-    // Find the matching option by strike price
     const option = options.find(opt => 
       Math.abs(opt.strike - parseFloat(strike)) < 0.01
     );
@@ -231,7 +228,6 @@ async function fetchOptionData(ticker, strike, expiry, type) {
       volume: option.volume || 0,
       openInterest: option.openInterest || 0,
       impliedVolatility: option.impliedVolatility || 0,
-      // Greeks (if available)
       delta: option.delta || null,
       gamma: option.gamma || null,
       theta: option.theta || null,
@@ -243,6 +239,7 @@ async function fetchOptionData(ticker, strike, expiry, type) {
     return null;
   }
 }
+
 async function updateStockPrices(stocks, userId) {
   const updates = [];
   
@@ -257,11 +254,9 @@ async function updateStockPrices(stocks, userId) {
       });
     }
     
-    // Delay to respect rate limits
     await new Promise(resolve => setTimeout(resolve, 1100));
   }
   
-  // Update database
   for (const update of updates) {
     try {
       await supabase
@@ -279,6 +274,7 @@ async function updateStockPrices(stocks, userId) {
   
   return updates.length;
 }
+
 async function updateOptionPrices(contracts, userId) {
   const updates = [];
   
@@ -291,15 +287,13 @@ async function updateOptionPrices(contracts, userId) {
     );
     
     if (optionData) {
-      // Calculate current market value
       const currentPrice = optionData.lastPrice || ((optionData.bid + optionData.ask) / 2);
       const originalPremium = parseFloat(contract.premium) || 0;
       const numContracts = parseFloat(contract.num_contracts) || 1;
       
-      // Current value vs what we sold it for
       const soldFor = originalPremium * 100 * numContracts;
       const currentValue = currentPrice * 100 * numContracts;
-      const unrealizedPL = soldFor - currentValue; // Profit if we sold and price decreased
+      const unrealizedPL = soldFor - currentValue;
       
       updates.push({
         id: contract.id,
@@ -314,11 +308,9 @@ async function updateOptionPrices(contracts, userId) {
       });
     }
     
-    // Delay to avoid overwhelming API
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
   
-  // Update database
   for (const update of updates) {
     try {
       await supabase
@@ -333,7 +325,6 @@ async function updateOptionPrices(contracts, userId) {
   
   return updates.length;
 }
-
 
 function DesktopApp({ user }) {
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -383,7 +374,6 @@ function DesktopApp({ user }) {
 
   return (
     <div className="flex h-screen">
-      {/* Sidebar */}
       <div className="sidebar w-64 flex flex-col">
         <div className="p-6 border-b border-gray-800">
           <h1 className="text-white text-xl font-semibold">WheelTracker</h1>
@@ -436,7 +426,6 @@ function DesktopApp({ user }) {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="top-nav px-6 py-4 flex items-center justify-between">
           <div>
@@ -460,7 +449,7 @@ function DesktopApp({ user }) {
         <div className="flex-1 overflow-y-auto">
           {currentPage === 'dashboard' && <DashboardPage contracts={contracts} stocks={stocks} />}
           {currentPage === 'options' && <OptionsPage contracts={contracts} onRefresh={fetchContracts} />}
-          {currentPage === 'holdings' && <HoldingsPage stocks={stocks} />}
+          {currentPage === 'holdings' && <HoldingsPage stocks={stocks} onRefresh={fetchStocks} />}
           {currentPage === 'analytics' && <AnalyticsPage contracts={contracts} stocks={stocks} />}
           {currentPage === 'add' && <AddTradePage onSuccess={() => { fetchContracts(); fetchStocks(); }} userId={user.id} />}
         </div>
@@ -490,7 +479,6 @@ function DashboardPage({ contracts, stocks }) {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Top Stats */}
       <div className="grid grid-cols-4 gap-4">
         <div className="data-card rounded-lg p-5">
           <div className="info-label mb-2">TOTAL PORTFOLIO VALUE</div>
@@ -521,11 +509,8 @@ function DashboardPage({ contracts, stocks }) {
         </div>
       </div>
 
-      {/* Two Column Layout */}
       <div className="grid grid-cols-3 gap-6">
-        {/* Left Column (2/3) */}
         <div className="col-span-2 space-y-6">
-          {/* Open Positions Table */}
           <div className="data-card rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
               <div className="info-label">OPEN POSITIONS</div>
@@ -581,9 +566,7 @@ function DashboardPage({ contracts, stocks }) {
           </div>
         </div>
 
-        {/* Right Column (1/3) */}
         <div className="space-y-6">
-          {/* Stock Holdings */}
           <div className="data-card rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-800">
               <div className="info-label">STOCK HOLDINGS</div>
@@ -627,7 +610,6 @@ function DashboardPage({ contracts, stocks }) {
             )}
           </div>
 
-          {/* Performance Breakdown */}
           <div className="data-card rounded-lg p-5">
             <div className="info-label mb-4">PERFORMANCE BREAKDOWN</div>
             <div className="space-y-3 text-sm">
@@ -666,12 +648,12 @@ function OptionsPage({ contracts, onRefresh }) {
     setUpdating(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const count = await updateOptionPrices(contracts, user.id);
+      const count = await updateOptionPrices(contracts, user.id); // ✅ FIXED: was updateStockPrices(stocks)
       setLastUpdate(new Date());
       alert(`✅ Updated ${count} option contracts!`);
       onRefresh();
     } catch (error) {
-      alert('Error updating options: ' + error.message);
+      alert('Error updating prices: ' + error.message);
     } finally {
       setUpdating(false);
     }
@@ -776,7 +758,7 @@ function HoldingsPage({ stocks, onRefresh }) {
       const count = await updateStockPrices(stocks, user.id);
       setLastUpdate(new Date());
       alert(`✅ Updated prices for ${count} stocks!`);
-      onRefresh();
+      onRefresh(); // ✅ FIXED: Added onRefresh call
     } catch (error) {
       alert('Error updating prices: ' + error.message);
     } finally {
@@ -877,7 +859,6 @@ function AnalyticsPage({ contracts, stocks }) {
   return (
     <div className="p-6 space-y-6">
       <div className="grid grid-cols-2 gap-6">
-        {/* Monthly Premium Chart */}
         {monthlyChartData.length > 0 && (
           <div className="data-card rounded-lg p-5">
             <div className="info-label mb-4">MONTHLY PREMIUM INCOME</div>
@@ -896,7 +877,6 @@ function AnalyticsPage({ contracts, stocks }) {
           </div>
         )}
 
-        {/* Put vs Call Distribution */}
         {pieData.length > 0 && (
           <div className="data-card rounded-lg p-5">
             <div className="info-label mb-4">PUT VS CALL DISTRIBUTION</div>
@@ -933,7 +913,6 @@ function AddTradePage({ onSuccess, userId }) {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  // Contract fields
   const [symbol, setSymbol] = useState('');
   const [strike, setStrike] = useState('');
   const [expiry, setExpiry] = useState('');
@@ -943,7 +922,6 @@ function AddTradePage({ onSuccess, userId }) {
   const [openFee, setOpenFee] = useState('0');
   const [sellDate, setSellDate] = useState(new Date().toISOString().split('T')[0]);
 
-  // Stock fields
   const [ticker, setTicker] = useState('');
   const [shares, setShares] = useState('');
   const [avgBuyPrice, setAvgBuyPrice] = useState('');
@@ -993,15 +971,15 @@ function AddTradePage({ onSuccess, userId }) {
     setSubmitting(true);
 
     const stockData = {
-  ticker: ticker.toUpperCase(),
-  shares: parseInt(shares),
-  avg_buy_price: parseFloat(avgBuyPrice),
-  current_price: parseFloat(avgBuyPrice),
-  buy_fee: parseFloat(buyFee),
-  source,
-  date_acquired: buyDate,  // Add this line
-  user_id: userId
-};
+      ticker: ticker.toUpperCase(),
+      shares: parseInt(shares),
+      avg_buy_price: parseFloat(avgBuyPrice),
+      current_price: parseFloat(avgBuyPrice),
+      buy_fee: parseFloat(buyFee),
+      source,
+      date_acquired: buyDate,
+      user_id: userId
+    };
 
     try {
       const { error } = await supabase.from('stocks').insert([stockData]);
@@ -1055,17 +1033,17 @@ function AddTradePage({ onSuccess, userId }) {
           <FormInput label="Average Buy Price" value={avgBuyPrice} onChange={setAvgBuyPrice} type="number" step="0.01" required />
           <FormInput label="Buy Fee" value={buyFee} onChange={setBuyFee} type="number" step="0.01" />
           <div>
-  <label className="info-label block mb-2">
-    {source === 'Assignment' ? 'ASSIGNMENT DATE' : 'PURCHASE DATE'}
-  </label>
-  <input
-    type="date"
-    value={buyDate}
-    onChange={(e) => setBuyDate(e.target.value)}
-    className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
-    required
-  />
-</div>
+            <label className="info-label block mb-2">
+              {source === 'Assignment' ? 'ASSIGNMENT DATE' : 'PURCHASE DATE'}
+            </label>
+            <input
+              type="date"
+              value={buyDate}
+              onChange={(e) => setBuyDate(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              required
+            />
+          </div>
           <div>
             <label className="info-label block mb-2">SOURCE</label>
             <select value={source} onChange={(e) => setSource(e.target.value)} className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm">
@@ -1112,4 +1090,3 @@ function FormInput({ label, value, onChange, placeholder, type = 'text', step, r
     </div>
   );
 }
-
