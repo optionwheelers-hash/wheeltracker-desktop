@@ -1,9 +1,9 @@
-// WHEELTRACKER DESKTOP WITH HEDGE/SPREAD FEATURE
-// Complete updated App.jsx
+// COMPLETE WHEELTRACKER DESKTOP WITH ALL 4 ACTIONS + HEDGE FEATURE
+// Replace your entire src/App.jsx with this file
 
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Home, List, Plus, Briefcase, BarChart3, LogOut, RefreshCw, Edit2, X, Shield } from 'lucide-react';
+import { Home, List, Plus, Briefcase, BarChart3, LogOut, RefreshCw, Edit2, X, Shield, DollarSign, Repeat, AlertCircle } from 'lucide-react';
 import { BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const FINNHUB_API_KEY = 'd6mn0b1r01qir35hndo0d6mn0b1r01qir35hndog';
@@ -460,7 +460,7 @@ function DesktopApp({ user }) {
 
 function DashboardPage({ contracts, stocks }) {
   const totalPremiums = contracts.reduce((sum, c) => {
-    if (c.is_hedge) return sum; // Skip hedge legs
+    if (c.is_hedge) return sum;
     const premiumToUse = c.net_premium !== null && c.net_premium !== undefined ? c.net_premium : parseFloat(c.premium) || 0;
     const numContracts = parseFloat(c.num_contracts) || 1;
     const totalPremium = premiumToUse * 100 * numContracts;
@@ -652,7 +652,7 @@ function DashboardPage({ contracts, stocks }) {
   );
 }
 
-// HEDGE MODAL COMPONENT
+// HEDGE MODAL
 function HedgeModal({ contract, onClose, onSuccess }) {
   const [hedgeStrike, setHedgeStrike] = useState('');
   const [hedgePremium, setHedgePremium] = useState('');
@@ -670,7 +670,6 @@ function HedgeModal({ contract, onClose, onSuccess }) {
     setSubmitting(true);
 
     try {
-      // Update the main contract with hedge info
       const { error } = await supabase
         .from('contracts')
         .update({
@@ -794,12 +793,362 @@ function HedgeModal({ contract, onClose, onSuccess }) {
   );
 }
 
+// CLOSE (BUYBACK) MODAL
+function CloseModal({ contract, onClose, onSuccess }) {
+  const [closePrice, setClosePrice] = useState('');
+  const [closeFee, setCloseFee] = useState('0');
+  const [closeDate, setCloseDate] = useState(new Date().toISOString().split('T')[0]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+
+    const premiumPerShare = parseFloat(contract.premium) || 0;
+    const numContracts = parseFloat(contract.num_contracts) || 1;
+    const totalPremium = premiumPerShare * 100 * numContracts;
+    const openFee = parseFloat(contract.open_fee) || 0;
+    const closePriceNum = parseFloat(closePrice) || 0;
+    const closeFeeNum = parseFloat(closeFee) || 0;
+
+    const profit = totalPremium - openFee - (closePriceNum * 100 * numContracts) - closeFeeNum;
+
+    try {
+      const { error } = await supabase
+        .from('contracts')
+        .update({
+          status: 'Closed',
+          close_date: closeDate,
+          close_price: closePriceNum,
+          close_fee: closeFeeNum,
+          profit: profit.toFixed(2)
+        })
+        .eq('id', contract.id);
+
+      if (error) throw error;
+      
+      alert('✅ Contract closed successfully!');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="data-card rounded-lg p-6 w-full max-w-md m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-white text-lg font-semibold">Close Contract</h3>
+            <p className="text-gray-500 text-sm mt-1">{contract.symbol} ${contract.strike} {contract.type}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-300">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="info-label block mb-2">BUYBACK DATE *</label>
+            <input
+              type="date"
+              value={closeDate}
+              onChange={(e) => setCloseDate(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="info-label block mb-2">BUYBACK PRICE (per share) *</label>
+            <input
+              type="number"
+              step="0.01"
+              value={closePrice}
+              onChange={(e) => setClosePrice(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              placeholder="0.50"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="info-label block mb-2">BUYBACK FEE</label>
+            <input
+              type="number"
+              step="0.01"
+              value={closeFee}
+              onChange={(e) => setCloseFee(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              placeholder="0.65"
+            />
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded font-medium transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-500 text-white rounded font-medium transition disabled:opacity-50"
+            >
+              {submitting ? 'Closing...' : 'Close Position'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ROLL MODAL
+function RollModal({ contract, onClose, onSuccess }) {
+  const [rollDate, setRollDate] = useState(new Date().toISOString().split('T')[0]);
+  const [buybackPrice, setBuybackPrice] = useState('');
+  const [buybackFee, setBuybackFee] = useState('0');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+
+    const premiumPerShare = parseFloat(contract.premium) || 0;
+    const numContracts = parseFloat(contract.num_contracts) || 1;
+    const totalOldPremium = premiumPerShare * 100 * numContracts;
+    const openFee = parseFloat(contract.open_fee) || 0;
+    const buybackPriceNum = parseFloat(buybackPrice) || 0;
+    const buybackFeeNum = parseFloat(buybackFee) || 0;
+
+    const oldProfit = totalOldPremium - openFee - (buybackPriceNum * 100 * numContracts) - buybackFeeNum;
+
+    try {
+      const { error } = await supabase
+        .from('contracts')
+        .update({
+          status: 'Closed',
+          close_date: rollDate,
+          close_price: buybackPriceNum,
+          close_fee: buybackFeeNum,
+          profit: oldProfit.toFixed(2),
+          rolled: true
+        })
+        .eq('id', contract.id);
+
+      if (error) throw error;
+      
+      alert('✅ Contract rolled! Add the new contract manually.');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="data-card rounded-lg p-6 w-full max-w-md m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-white text-lg font-semibold">Roll Contract</h3>
+            <p className="text-gray-500 text-sm mt-1">{contract.symbol} ${contract.strike} {contract.type}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-300">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="mb-4 p-3 bg-purple-500/10 border border-purple-500/20 rounded text-sm text-purple-300">
+          After rolling, add the new contract manually with updated expiration/strike/premium.
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="info-label block mb-2">ROLL DATE *</label>
+            <input
+              type="date"
+              value={rollDate}
+              onChange={(e) => setRollDate(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="info-label block mb-2">BUYBACK PRICE (per share) *</label>
+            <input
+              type="number"
+              step="0.01"
+              value={buybackPrice}
+              onChange={(e) => setBuybackPrice(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              placeholder="0.50"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="info-label block mb-2">BUYBACK FEE</label>
+            <input
+              type="number"
+              step="0.01"
+              value={buybackFee}
+              onChange={(e) => setBuybackFee(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              placeholder="0.65"
+            />
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded font-medium transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded font-medium transition disabled:opacity-50"
+            >
+              {submitting ? 'Rolling...' : 'Roll Contract'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ASSIGNED MODAL
+function AssignedModal({ contract, onClose, onSuccess }) {
+  const [assignmentDate, setAssignmentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [submitting, setSubmitting] = useState(false);
+  const isPut = contract.type === 'Put';
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+
+    const premiumPerShare = parseFloat(contract.premium) || 0;
+    const numContracts = parseFloat(contract.num_contracts) || 1;
+    const totalPremium = premiumPerShare * 100 * numContracts;
+    const openFee = parseFloat(contract.open_fee) || 0;
+
+    const profit = totalPremium - openFee;
+
+    try {
+      const { error } = await supabase
+        .from('contracts')
+        .update({
+          status: 'Closed',
+          close_date: assignmentDate,
+          close_price: 0,
+          close_fee: 0,
+          profit: profit.toFixed(2)
+        })
+        .eq('id', contract.id);
+
+      if (error) throw error;
+      
+      alert(`✅ Marked as assigned! ${isPut ? 'Add stock to portfolio manually' : 'Remove stock from portfolio manually'}.`);
+      onSuccess();
+      onClose();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const shares = parseFloat(contract.num_contracts) * 100;
+  const totalCost = shares * parseFloat(contract.strike);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="data-card rounded-lg p-6 w-full max-w-md m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-white text-lg font-semibold">Mark as Assigned</h3>
+            <p className="text-gray-500 text-sm mt-1">{contract.symbol} ${contract.strike} {contract.type}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-300">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="mb-4 p-3 bg-orange-500/10 border border-orange-500/20 rounded text-sm text-orange-300">
+          {isPut 
+            ? `Purchased ${shares} shares at $${contract.strike}/share. Remember to add stock manually!`
+            : `Sold ${shares} shares at $${contract.strike}/share. Remember to remove stock manually!`
+          }
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="info-label block mb-2">ASSIGNMENT DATE *</label>
+            <input
+              type="date"
+              value={assignmentDate}
+              onChange={(e) => setAssignmentDate(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              required
+            />
+          </div>
+
+          <div className="p-4 bg-gray-800/50 rounded text-sm space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-400">Shares {isPut ? 'Purchased' : 'Sold'}:</span>
+              <span className="text-white font-medium">{shares}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Price per Share:</span>
+              <span className="text-white font-medium">${contract.strike}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Total:</span>
+              <span className="text-white font-medium">${totalCost.toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded font-medium transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 px-4 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded font-medium transition disabled:opacity-50"
+            >
+              {submitting ? 'Saving...' : 'Mark Assigned'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function OptionsPage({ contracts, onRefresh, userId }) {
   const [updating, setUpdating] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [hedgeModal, setHedgeModal] = useState(null);
+  const [activeModal, setActiveModal] = useState(null);
+  const [selectedContract, setSelectedContract] = useState(null);
 
-  // Filter out hedge legs from display
   const mainContracts = contracts.filter(c => !c.is_hedge);
 
   const handleUpdatePrices = async () => {
@@ -815,6 +1164,16 @@ function OptionsPage({ contracts, onRefresh, userId }) {
     } finally {
       setUpdating(false);
     }
+  };
+
+  const openModal = (modal, contract) => {
+    setActiveModal(modal);
+    setSelectedContract(contract);
+  };
+
+  const closeModal = () => {
+    setActiveModal(null);
+    setSelectedContract(null);
   };
 
   return (
@@ -906,15 +1265,40 @@ function OptionsPage({ contracts, onRefresh, userId }) {
                   <div className={`col-span-1 text-right font-medium ${netPL >= 0 ? 'gain' : 'loss'}`}>
                     {netPL >= 0 ? '+' : ''}${netPL.toFixed(0)}
                   </div>
-                  <div className="col-span-1 text-right">
-                    {contract.status === 'Open' && !isHedged && (
-                      <button
-                        onClick={() => setHedgeModal(contract)}
-                        className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition flex items-center gap-1"
-                      >
-                        <Shield size={12} />
-                        Hedge
-                      </button>
+                  <div className="col-span-1 text-right flex gap-1">
+                    {contract.status === 'Open' && (
+                      <>
+                        <button
+                          onClick={() => openModal('close', contract)}
+                          className="p-1 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded transition"
+                          title="Close"
+                        >
+                          <DollarSign size={14} />
+                        </button>
+                        <button
+                          onClick={() => openModal('roll', contract)}
+                          className="p-1 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded transition"
+                          title="Roll"
+                        >
+                          <Repeat size={14} />
+                        </button>
+                        <button
+                          onClick={() => openModal('assigned', contract)}
+                          className="p-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 rounded transition"
+                          title="Assigned"
+                        >
+                          <AlertCircle size={14} />
+                        </button>
+                        {!isHedged && (
+                          <button
+                            onClick={() => openModal('hedge', contract)}
+                            className="p-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded transition"
+                            title="Hedge"
+                          >
+                            <Shield size={14} />
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -924,10 +1308,34 @@ function OptionsPage({ contracts, onRefresh, userId }) {
         )}
       </div>
 
-      {hedgeModal && (
+      {activeModal === 'hedge' && selectedContract && (
         <HedgeModal
-          contract={hedgeModal}
-          onClose={() => setHedgeModal(null)}
+          contract={selectedContract}
+          onClose={closeModal}
+          onSuccess={onRefresh}
+        />
+      )}
+
+      {activeModal === 'close' && selectedContract && (
+        <CloseModal
+          contract={selectedContract}
+          onClose={closeModal}
+          onSuccess={onRefresh}
+        />
+      )}
+
+      {activeModal === 'roll' && selectedContract && (
+        <RollModal
+          contract={selectedContract}
+          onClose={closeModal}
+          onSuccess={onRefresh}
+        />
+      )}
+
+      {activeModal === 'assigned' && selectedContract && (
+        <AssignedModal
+          contract={selectedContract}
+          onClose={closeModal}
           onSuccess={onRefresh}
         />
       )}
@@ -1158,7 +1566,6 @@ function AddTradePage({ onSuccess, userId }) {
       user_id: userId
     };
 
-    // Add hedge info if hedged
     if (isHedged) {
       contractData.hedge_strike = parseFloat(hedgeStrike);
       contractData.hedge_premium = parseFloat(hedgePremium);
@@ -1289,7 +1696,6 @@ function AddTradePage({ onSuccess, userId }) {
           <FormInput label="Sell Fee" value={openFee} onChange={setOpenFee} type="number" step="0.01" placeholder="0.65" />
           <FormInput label="Number of Contracts" value={numContracts} onChange={setNumContracts} type="number" required />
 
-          {/* HEDGE TOGGLE */}
           <div className="pt-4 border-t border-gray-700">
             <div className="flex items-center justify-between mb-4">
               <label className="info-label">HEDGED?</label>
