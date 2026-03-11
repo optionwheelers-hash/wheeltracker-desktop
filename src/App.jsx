@@ -1,9 +1,9 @@
-// PROFESSIONAL DESKTOP APP.JSX FOR WHEELTRACKER - FIXED VERSION
-// Replace your src/App.jsx with this entire file
+// WHEELTRACKER DESKTOP WITH HEDGE/SPREAD FEATURE
+// Complete updated App.jsx
 
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { Home, List, Plus, Briefcase, BarChart3, LogOut, RefreshCw, Edit2, X } from 'lucide-react';
+import { Home, List, Plus, Briefcase, BarChart3, LogOut, RefreshCw, Edit2, X, Shield } from 'lucide-react';
 import { BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const FINNHUB_API_KEY = 'd6mn0b1r01qir35hndo0d6mn0b1r01qir35hndog';
@@ -448,7 +448,7 @@ function DesktopApp({ user }) {
 
         <div className="flex-1 overflow-y-auto">
           {currentPage === 'dashboard' && <DashboardPage contracts={contracts} stocks={stocks} />}
-          {currentPage === 'options' && <OptionsPage contracts={contracts} onRefresh={fetchContracts} />}
+          {currentPage === 'options' && <OptionsPage contracts={contracts} onRefresh={fetchContracts} userId={user.id} />}
           {currentPage === 'holdings' && <HoldingsPage stocks={stocks} onRefresh={fetchStocks} />}
           {currentPage === 'analytics' && <AnalyticsPage contracts={contracts} stocks={stocks} />}
           {currentPage === 'add' && <AddTradePage onSuccess={() => { fetchContracts(); fetchStocks(); }} userId={user.id} />}
@@ -460,15 +460,16 @@ function DesktopApp({ user }) {
 
 function DashboardPage({ contracts, stocks }) {
   const totalPremiums = contracts.reduce((sum, c) => {
-    const premiumPerShare = parseFloat(c.premium) || 0;
+    if (c.is_hedge) return sum; // Skip hedge legs
+    const premiumToUse = c.net_premium !== null && c.net_premium !== undefined ? c.net_premium : parseFloat(c.premium) || 0;
     const numContracts = parseFloat(c.num_contracts) || 1;
-    const totalPremium = premiumPerShare * 100 * numContracts;
+    const totalPremium = premiumToUse * 100 * numContracts;
     const openFee = parseFloat(c.open_fee) || 0;
     return sum + (totalPremium - openFee);
   }, 0);
 
-  const closedContracts = contracts.filter(c => c.status === 'Closed');
-  const openContracts = contracts.filter(c => c.status === 'Open');
+  const closedContracts = contracts.filter(c => c.status === 'Closed' && !c.is_hedge);
+  const openContracts = contracts.filter(c => c.status === 'Open' && !c.is_hedge);
   const realizedProfit = closedContracts.reduce((sum, c) => sum + (parseFloat(c.profit) || 0), 0);
   const stockValue = stocks.reduce((sum, s) => sum + (s.shares * (s.current_price || s.avg_buy_price)), 0);
   const stockCostBasis = stocks.reduce((sum, s) => sum + (s.shares * s.avg_buy_price), 0);
@@ -493,7 +494,7 @@ function DashboardPage({ contracts, stocks }) {
         <div className="data-card rounded-lg p-5">
           <div className="info-label mb-2">NET PREMIUM INCOME</div>
           <div className="text-white text-3xl font-semibold data-value mb-1">${totalPremiums.toLocaleString(undefined, {maximumFractionDigits: 0})}</div>
-          <div className="text-sm neutral">{contracts.length} total contracts</div>
+          <div className="text-sm neutral">{contracts.filter(c => !c.is_hedge).length} total contracts</div>
         </div>
 
         <div className="data-card rounded-lg p-5">
@@ -532,14 +533,25 @@ function DashboardPage({ contracts, stocks }) {
                 </div>
 
                 {openContracts.slice(0, 5).map((contract) => {
-                  const premiumPerShare = parseFloat(contract.premium) || 0;
+                  const premiumPerShare = contract.net_premium !== null && contract.net_premium !== undefined 
+                    ? contract.net_premium 
+                    : parseFloat(contract.premium) || 0;
                   const numContracts = parseFloat(contract.num_contracts) || 1;
                   const totalPremium = premiumPerShare * 100 * numContracts;
                   const netPL = totalPremium - (parseFloat(contract.open_fee) || 0);
+                  const isHedged = contract.hedge_strike !== null && contract.hedge_strike !== undefined;
 
                   return (
                     <div key={contract.id} className="data-row grid grid-cols-12 gap-4 px-5 py-4 items-center">
-                      <div className="col-span-2 text-white font-medium">{contract.symbol}</div>
+                      <div className="col-span-2">
+                        <div className="text-white font-medium">{contract.symbol}</div>
+                        {isHedged && (
+                          <div className="flex items-center gap-1 text-xs text-blue-400 mt-1">
+                            <Shield size={10} />
+                            <span>{contract.strike}/{contract.hedge_strike} Spread</span>
+                          </div>
+                        )}
+                      </div>
                       <div className="col-span-1">
                         <span className={`text-xs px-2 py-1 rounded ${contract.type === 'Put' ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'}`}>
                           {contract.type.toUpperCase()}
@@ -640,15 +652,161 @@ function DashboardPage({ contracts, stocks }) {
   );
 }
 
-function OptionsPage({ contracts, onRefresh }) {
+// HEDGE MODAL COMPONENT
+function HedgeModal({ contract, onClose, onSuccess }) {
+  const [hedgeStrike, setHedgeStrike] = useState('');
+  const [hedgePremium, setHedgePremium] = useState('');
+  const [hedgeFee, setHedgeFee] = useState('0');
+  const [hedgeDate, setHedgeDate] = useState(new Date().toISOString().split('T')[0]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const originalPremium = parseFloat(contract.premium) || 0;
+  const hedgePremiumNum = parseFloat(hedgePremium) || 0;
+  const hedgeFeeNum = parseFloat(hedgeFee) || 0;
+  const netPremium = originalPremium - hedgePremiumNum - (hedgeFeeNum / 100);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+
+    try {
+      // Update the main contract with hedge info
+      const { error } = await supabase
+        .from('contracts')
+        .update({
+          hedge_strike: parseFloat(hedgeStrike),
+          hedge_premium: parseFloat(hedgePremium),
+          hedge_fee: parseFloat(hedgeFee),
+          hedge_date: hedgeDate,
+          net_premium: netPremium
+        })
+        .eq('id', contract.id);
+
+      if (error) throw error;
+      
+      alert('✅ Hedge added successfully!');
+      onSuccess();
+      onClose();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="data-card rounded-lg p-6 w-full max-w-md m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-white text-lg font-semibold">Add Hedge</h3>
+            <p className="text-gray-500 text-sm mt-1">{contract.symbol} ${contract.strike} {contract.type}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-300">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="info-label block mb-2">HEDGE STRIKE PRICE *</label>
+            <input
+              type="number"
+              step="0.01"
+              value={hedgeStrike}
+              onChange={(e) => setHedgeStrike(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              placeholder="e.g., 200"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="info-label block mb-2">PURCHASE DATE *</label>
+            <input
+              type="date"
+              value={hedgeDate}
+              onChange={(e) => setHedgeDate(e.target.value)}
+              className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="info-label block mb-2">PREMIUM PAID *</label>
+              <input
+                type="number"
+                step="0.01"
+                value={hedgePremium}
+                onChange={(e) => setHedgePremium(e.target.value)}
+                className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+                placeholder="e.g., 1.50"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="info-label block mb-2">PURCHASE FEE</label>
+              <input
+                type="number"
+                step="0.01"
+                value={hedgeFee}
+                onChange={(e) => setHedgeFee(e.target.value)}
+                className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+                placeholder="0.65"
+              />
+            </div>
+          </div>
+
+          {hedgePremium && (
+            <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded">
+              <div className="text-sm text-blue-400 mb-1">Net Premium Calculation:</div>
+              <div className="text-white font-medium">
+                ${originalPremium.toFixed(2)} - ${hedgePremiumNum.toFixed(2)} - ${(hedgeFeeNum / 100).toFixed(2)} = 
+                <span className="text-green-400"> ${netPremium.toFixed(2)}</span> per share
+              </div>
+              <div className="text-xs text-gray-400 mt-2">
+                Per contract: ${(netPremium * 100).toFixed(2)}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded font-medium transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium transition disabled:opacity-50"
+            >
+              {submitting ? 'Adding...' : 'Add Hedge'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function OptionsPage({ contracts, onRefresh, userId }) {
   const [updating, setUpdating] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [hedgeModal, setHedgeModal] = useState(null);
+
+  // Filter out hedge legs from display
+  const mainContracts = contracts.filter(c => !c.is_hedge);
 
   const handleUpdatePrices = async () => {
     setUpdating(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const count = await updateOptionPrices(contracts, user.id); // ✅ FIXED: was updateStockPrices(stocks)
+      const count = await updateOptionPrices(mainContracts, user.id);
       setLastUpdate(new Date());
       alert(`✅ Updated ${count} option contracts!`);
       onRefresh();
@@ -673,7 +831,7 @@ function OptionsPage({ contracts, onRefresh }) {
           </div>
           <button
             onClick={handleUpdatePrices}
-            disabled={updating || contracts.filter(c => c.status === 'Open').length === 0}
+            disabled={updating || mainContracts.filter(c => c.status === 'Open').length === 0}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded transition disabled:opacity-50 flex items-center gap-2"
           >
             <RefreshCw size={16} className={updating ? 'animate-spin' : ''} />
@@ -681,7 +839,7 @@ function OptionsPage({ contracts, onRefresh }) {
           </button>
         </div>
 
-        {contracts.length === 0 ? (
+        {mainContracts.length === 0 ? (
           <div className="px-5 py-12 text-center text-gray-500 text-sm">No contracts found</div>
         ) : (
           <>
@@ -689,15 +847,18 @@ function OptionsPage({ contracts, onRefresh }) {
               <div className="col-span-2">SYMBOL</div>
               <div className="col-span-1">TYPE</div>
               <div className="col-span-1">STATUS</div>
-              <div className="col-span-2">STRIKE</div>
+              <div className="col-span-1">STRIKE</div>
               <div className="col-span-2">EXPIRY</div>
               <div className="col-span-1 text-center">QTY</div>
               <div className="col-span-2 text-right">PREMIUM</div>
               <div className="col-span-1 text-right">P&L</div>
+              <div className="col-span-1"></div>
             </div>
 
-            {contracts.map((contract) => {
-              const premiumPerShare = parseFloat(contract.premium) || 0;
+            {mainContracts.map((contract) => {
+              const premiumPerShare = contract.net_premium !== null && contract.net_premium !== undefined 
+                ? contract.net_premium 
+                : parseFloat(contract.premium) || 0;
               const numContracts = parseFloat(contract.num_contracts) || 1;
               const totalPremium = premiumPerShare * 100 * numContracts;
               
@@ -710,9 +871,19 @@ function OptionsPage({ contracts, onRefresh }) {
                 netPL = totalPremium - (parseFloat(contract.open_fee) || 0);
               }
 
+              const isHedged = contract.hedge_strike !== null && contract.hedge_strike !== undefined;
+
               return (
                 <div key={contract.id} className="data-row grid grid-cols-12 gap-4 px-5 py-4 items-center">
-                  <div className="col-span-2 text-white font-medium">{contract.symbol}</div>
+                  <div className="col-span-2">
+                    <div className="text-white font-medium">{contract.symbol}</div>
+                    {isHedged && (
+                      <div className="flex items-center gap-1 text-xs text-blue-400 mt-1">
+                        <Shield size={10} />
+                        <span>{contract.strike}/{contract.hedge_strike}</span>
+                      </div>
+                    )}
+                  </div>
                   <div className="col-span-1">
                     <span className={`text-xs px-2 py-1 rounded ${contract.type === 'Put' ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'}`}>
                       {contract.type.toUpperCase()}
@@ -723,7 +894,7 @@ function OptionsPage({ contracts, onRefresh }) {
                       {contract.status}
                     </span>
                   </div>
-                  <div className="col-span-2 neutral">${contract.strike}</div>
+                  <div className="col-span-1 neutral">${contract.strike}</div>
                   <div className="col-span-2 neutral text-sm">{new Date(contract.expiry).toLocaleDateString()}</div>
                   <div className="col-span-1 text-center neutral">{contract.num_contracts}</div>
                   <div className="col-span-2 text-right neutral">
@@ -735,12 +906,31 @@ function OptionsPage({ contracts, onRefresh }) {
                   <div className={`col-span-1 text-right font-medium ${netPL >= 0 ? 'gain' : 'loss'}`}>
                     {netPL >= 0 ? '+' : ''}${netPL.toFixed(0)}
                   </div>
+                  <div className="col-span-1 text-right">
+                    {contract.status === 'Open' && !isHedged && (
+                      <button
+                        onClick={() => setHedgeModal(contract)}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition flex items-center gap-1"
+                      >
+                        <Shield size={12} />
+                        Hedge
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
           </>
         )}
       </div>
+
+      {hedgeModal && (
+        <HedgeModal
+          contract={hedgeModal}
+          onClose={() => setHedgeModal(null)}
+          onSuccess={onRefresh}
+        />
+      )}
     </div>
   );
 }
@@ -758,7 +948,7 @@ function HoldingsPage({ stocks, onRefresh }) {
       const count = await updateStockPrices(stocks, user.id);
       setLastUpdate(new Date());
       alert(`✅ Updated prices for ${count} stocks!`);
-      onRefresh(); // ✅ FIXED: Added onRefresh call
+      onRefresh();
     } catch (error) {
       alert('Error updating prices: ' + error.message);
     } finally {
@@ -836,12 +1026,16 @@ function HoldingsPage({ stocks, onRefresh }) {
 }
 
 function AnalyticsPage({ contracts, stocks }) {
-  const monthlyData = contracts.reduce((acc, c) => {
+  const mainContracts = contracts.filter(c => !c.is_hedge);
+  
+  const monthlyData = mainContracts.reduce((acc, c) => {
     const month = new Date(c.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
     if (!acc[month]) {
       acc[month] = { month, premium: 0 };
     }
-    const premiumPerShare = parseFloat(c.premium) || 0;
+    const premiumPerShare = c.net_premium !== null && c.net_premium !== undefined 
+      ? c.net_premium 
+      : parseFloat(c.premium) || 0;
     const numContracts = parseFloat(c.num_contracts) || 1;
     acc[month].premium += premiumPerShare * 100 * numContracts;
     return acc;
@@ -849,8 +1043,8 @@ function AnalyticsPage({ contracts, stocks }) {
 
   const monthlyChartData = Object.values(monthlyData).slice(-6);
 
-  const puts = contracts.filter(c => c.type === 'Put').length;
-  const calls = contracts.filter(c => c.type === 'Call').length;
+  const puts = mainContracts.filter(c => c.type === 'Put').length;
+  const calls = mainContracts.filter(c => c.type === 'Call').length;
   const pieData = [
     { name: 'Puts', value: puts },
     { name: 'Calls', value: calls }
@@ -913,6 +1107,7 @@ function AddTradePage({ onSuccess, userId }) {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
 
+  // Contract fields
   const [symbol, setSymbol] = useState('');
   const [strike, setStrike] = useState('');
   const [expiry, setExpiry] = useState('');
@@ -922,12 +1117,26 @@ function AddTradePage({ onSuccess, userId }) {
   const [openFee, setOpenFee] = useState('0');
   const [sellDate, setSellDate] = useState(new Date().toISOString().split('T')[0]);
 
+  // Hedge fields
+  const [isHedged, setIsHedged] = useState(false);
+  const [hedgeStrike, setHedgeStrike] = useState('');
+  const [hedgePremium, setHedgePremium] = useState('');
+  const [hedgeFee, setHedgeFee] = useState('0');
+  const [hedgeDate, setHedgeDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Stock fields
   const [ticker, setTicker] = useState('');
   const [shares, setShares] = useState('');
   const [avgBuyPrice, setAvgBuyPrice] = useState('');
   const [buyFee, setBuyFee] = useState('0');
   const [source, setSource] = useState('Assignment');
   const [buyDate, setBuyDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Calculate net premium
+  const premiumNum = parseFloat(premium) || 0;
+  const hedgePremiumNum = parseFloat(hedgePremium) || 0;
+  const hedgeFeeNum = parseFloat(hedgeFee) || 0;
+  const netPremium = isHedged ? premiumNum - hedgePremiumNum - (hedgeFeeNum / 100) : premiumNum;
 
   const handleSubmitContract = async (e) => {
     e.preventDefault();
@@ -945,8 +1154,18 @@ function AddTradePage({ onSuccess, userId }) {
       rolled: false,
       date: sellDate,
       open_fee: parseFloat(openFee),
+      is_hedge: false,
       user_id: userId
     };
+
+    // Add hedge info if hedged
+    if (isHedged) {
+      contractData.hedge_strike = parseFloat(hedgeStrike);
+      contractData.hedge_premium = parseFloat(hedgePremium);
+      contractData.hedge_fee = parseFloat(hedgeFee);
+      contractData.hedge_date = hedgeDate;
+      contractData.net_premium = netPremium;
+    }
 
     try {
       const { error } = await supabase.from('contracts').insert([contractData]);
@@ -958,6 +1177,10 @@ function AddTradePage({ onSuccess, userId }) {
       setPremium('');
       setNumContracts('1');
       setOpenFee('0');
+      setIsHedged(false);
+      setHedgeStrike('');
+      setHedgePremium('');
+      setHedgeFee('0');
       setTimeout(() => { setSuccess(false); onSuccess(); }, 2000);
     } catch (err) {
       alert('Error: ' + err.message);
@@ -1065,6 +1288,93 @@ function AddTradePage({ onSuccess, userId }) {
           <FormInput label="Premium per Share" value={premium} onChange={setPremium} type="number" step="0.01" placeholder="2.50" required />
           <FormInput label="Sell Fee" value={openFee} onChange={setOpenFee} type="number" step="0.01" placeholder="0.65" />
           <FormInput label="Number of Contracts" value={numContracts} onChange={setNumContracts} type="number" required />
+
+          {/* HEDGE TOGGLE */}
+          <div className="pt-4 border-t border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <label className="info-label">HEDGED?</label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsHedged(false)}
+                  className={`px-4 py-2 rounded text-sm font-medium transition ${!isHedged ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-400'}`}
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsHedged(true)}
+                  className={`px-4 py-2 rounded text-sm font-medium transition ${isHedged ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400'}`}
+                >
+                  Yes
+                </button>
+              </div>
+            </div>
+
+            {isHedged && (
+              <div className="space-y-4 p-4 bg-blue-500/5 border border-blue-500/20 rounded">
+                <div className="text-sm text-blue-400 mb-3 flex items-center gap-2">
+                  <Shield size={14} />
+                  <span>Hedge Leg Details</span>
+                </div>
+                
+                <FormInput 
+                  label="Hedge Strike Price" 
+                  value={hedgeStrike} 
+                  onChange={setHedgeStrike} 
+                  type="number" 
+                  step="0.01" 
+                  placeholder="e.g., 200"
+                  required={isHedged}
+                />
+                
+                <div>
+                  <label className="info-label block mb-2">PURCHASE DATE</label>
+                  <input
+                    type="date"
+                    value={hedgeDate}
+                    onChange={(e) => setHedgeDate(e.target.value)}
+                    className="w-full bg-black/20 border border-gray-700 rounded px-4 py-3 text-white text-sm focus:outline-none focus:border-gray-600"
+                    required={isHedged}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <FormInput 
+                    label="Premium Paid" 
+                    value={hedgePremium} 
+                    onChange={setHedgePremium} 
+                    type="number" 
+                    step="0.01" 
+                    placeholder="1.50"
+                    required={isHedged}
+                  />
+                  <FormInput 
+                    label="Purchase Fee" 
+                    value={hedgeFee} 
+                    onChange={setHedgeFee} 
+                    type="number" 
+                    step="0.01" 
+                    placeholder="0.65"
+                  />
+                </div>
+
+                {hedgePremium && (
+                  <div className="p-3 bg-green-500/10 border border-green-500/20 rounded">
+                    <div className="text-xs text-gray-400 mb-1">Net Premium:</div>
+                    <div className="text-white font-medium">
+                      ${premiumNum.toFixed(2)} - ${hedgePremiumNum.toFixed(2)} - ${(hedgeFeeNum / 100).toFixed(2)} = 
+                      <span className="text-green-400"> ${netPremium.toFixed(2)}</span> per share
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      Per contract: ${(netPremium * 100).toFixed(2)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <button type="submit" disabled={submitting} className="w-full bg-gray-700 hover:bg-gray-600 text-white py-3 rounded font-medium disabled:opacity-50">
             {submitting ? 'Adding...' : `Add ${type} Contract`}
           </button>
